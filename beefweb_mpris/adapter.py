@@ -1,13 +1,15 @@
+import math
+import urllib.parse
 import urllib.request
 from mimetypes import guess_type
 from typing import Optional
-from math import log
+
+from gi.repository import GLib
 from mpris_server import MetadataObj, ValidMetadata
 from mpris_server.adapters import MprisAdapter
 from mpris_server.base import Microseconds, PlayState, DbusObj, DEFAULT_RATE, RateDecimal, VolumeDecimal, Track, \
     DEFAULT_TRACK_ID
 from mpris_server.mpris.compat import get_track_id
-from gi.repository import GLib
 
 from beefweb_mpris.beefweb import Beefweb
 
@@ -22,10 +24,11 @@ class BeefwebAdapter(MprisAdapter):
             active_item = self.beefweb.active_item
             columns = active_item.columns
             self.beefweb.download_art()
+            coverart_name = urllib.parse.quote(columns.album)
             return MetadataObj(
                 track_id=get_track_id(active_item.columns.title),
                 length=int(self.beefweb.active_item.duration * 1000000),
-                art_url=f'file://{GLib.get_user_cache_dir()}/beefweb_mpris/{columns.album}',
+                art_url=f'file://{GLib.get_user_cache_dir()}/beefweb_mpris/{coverart_name}',
                 title=columns.title,
                 artists=[columns.artists],
                 album=columns.album,
@@ -104,6 +107,7 @@ class BeefwebAdapter(MprisAdapter):
             self.beefweb.client.set_player_state(playback_mode=0)
         else:
             self.beefweb.client.set_player_state(playback_mode=2)
+        print(self.beefweb.state.playback_mode.number)
 
     def set_loop_status(self, val: str):
         if val == "None":
@@ -148,19 +152,55 @@ class BeefwebAdapter(MprisAdapter):
 
     def get_art_url(self, track: int) -> str:
         self.beefweb.download_art()
-        return f'file://{GLib.get_user_cache_dir()}/beefweb_mpris/{self.beefweb.active_item.columns.album}'
+        coverart_name = urllib.parse.quote(self.beefweb.active_item.columns.album)
+        return f'file://{GLib.get_user_cache_dir()}/beefweb_mpris/{coverart_name}'
 
     def get_volume(self) -> VolumeDecimal:
         try:
-            print("returning volume: ", self.beefweb.state.volume.value)
-            return self.beefweb.state.volume.value + 100.0
+            # volume from beefweb
+            current_vol = self.beefweb.state.volume.value
+            min_vol = self.beefweb.state.volume.min
+            max_vol = self.beefweb.state.volume.max
+
+            # normalized volume (0.0 to 1.0)
+            normalized_vol = (current_vol - min_vol) / (max_vol - min_vol)
+
+            if normalized_vol > 0:
+                # checks if the player uses dB
+                if self.beefweb.state.volume.type == "db":
+                    linear_vol = math.exp(normalized_vol * math.log(100)) / 100  # Convert log scale to linear
+                else:
+                    linear_vol = normalized_vol
+            else:
+                linear_vol = 0
+            if linear_vol > 1.0:
+                linear_vol = 1.0
+            
+            #print("returning volume: ", linear_vol)
+            return linear_vol
+        
         except AttributeError:
             return 100
 
     def set_volume(self, val: VolumeDecimal):
-        # I don't know what im doing but it works kinda
-        new_vol = 0 - (100 ** (1 - val))
-        print(new_vol)
+        # volume value sent by the mpris client
+        #print("Setting volume (linear input): ", val)
+
+        linear_vol = max(0, min(1, val))
+        min_vol = self.beefweb.state.volume.min
+        max_vol = self.beefweb.state.volume.max
+
+        # check if the player uses dB
+        if self.beefweb.state.volume.type == "db":
+            if linear_vol > 0:
+                log_vol = math.log(linear_vol * 100) / math.log(100)  # Convert linear to log scale
+            else:
+                log_vol = 0
+            new_vol = min_vol + log_vol * (max_vol - min_vol)
+        else:
+            new_vol = min_vol + linear_vol * (max_vol - min_vol)
+
+        #print(f"Setting player volume: {new_vol}")      
         return self.beefweb.client.set_player_state(volume=new_vol)
 
     def is_mute(self) -> bool:
