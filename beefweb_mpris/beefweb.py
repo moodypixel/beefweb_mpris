@@ -12,6 +12,8 @@ class Beefweb:
     def __init__(self, server: str, port: int, username: str, password: str):
         self.server = server
         self.port = port
+        self.username = username
+        self.password = password
         self.event_listener = pyfoobeef.EventListener(
             base_url=server,
             port=port,
@@ -48,8 +50,11 @@ class Beefweb:
 
     def download_art(self):
         try:
-            r = requests.get(f'http://{self.server}:{self.port}/api'
-                f'/artwork/{self.active_item.playlist_id}/{self.active_item.index}')
+            r = requests.get(
+                f'http://{self.server}:{self.port}/api/artwork/'
+                f'{self.active_item.playlist_id}/{self.active_item.index}',
+                auth=(self.username, self.password)
+                )
             cover_path = f'{GLib.get_user_cache_dir()}/beefweb_mpris/{self.active_item.columns.album}'
             if not os.path.isfile(cover_path):
                 if not os.path.isdir(os.path.dirname(cover_path)):
